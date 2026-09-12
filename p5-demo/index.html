@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Schlieren · Live camera lab</title>
+  <link rel="stylesheet" href="/style.css">
+  <script defer src="/vendor/p5.min.js"></script>
+  <script defer src="/sketch.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">≈</span><strong>SCHLIEREN</strong><span class="lab-label">LIVE CAMERA LAB</span></div>
+    <div class="top-actions"><span id="connection"><i></i> Connecting</span><button id="hide-controls" title="Hide controls (H)">Controls <kbd>H</kbd></button><button id="fullscreen" title="Fullscreen (F)">Fullscreen <span>↗</span></button></div>
+  </header>
+  <div class="workspace">
+    <aside id="controls" aria-label="Camera and processing controls">
+      <section>
+        <div class="section-heading"><h2>01 / SOURCE</h2><button id="refresh-cameras" class="text-button">Refresh ↻</button></div>
+        <label for="camera">Connected camera</label>
+        <select id="camera"><option value="demo">Synthetic demo</option></select>
+        <p class="hint">Press <kbd>1</kbd>–<kbd>9</kbd> to switch cameras.</p>
+        <div id="camera-list" class="camera-list" aria-label="Connected cameras"></div>
+        <button id="stop-camera" class="quiet-button">Release camera</button>
+      </section>
+      <section>
+        <h2>02 / BACKGROUND MODEL</h2>
+        <div class="mode-grid" aria-label="Background model">
+          <button data-mode="reference" aria-pressed="true">Reference<span>Captured average</span></button>
+          <button data-mode="mog" aria-pressed="false">MOG<span>Gaussian mixtures</span></button>
+          <button data-mode="mog2" aria-pressed="false">MOG2<span>Adaptive mixtures</span></button>
+          <button data-mode="gmg" aria-pressed="false">GMG<span>Statistical model</span></button>
+        </div>
+        <button id="retrain" class="primary-button">Retrain background <kbd>SPACE</kbd></button>
+        <p class="hint">Keep the scene still during training. Retrain after moving or switching the camera.</p>
+        <div class="training-track" role="progressbar" aria-label="Background training" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="training-progress"></div></div>
+        <div class="training-row"><span id="training-label">Waiting for server</span><button id="learning" class="text-button" disabled>Enable learning</button></div>
+      </section>
+      <section>
+        <h2>03 / ADJUSTMENTS</h2>
+        <label class="range-label" for="gain">Difference gain <output id="gain-value">8×</output></label>
+        <input id="gain" type="range" min="1" max="64" value="8">
+        <label class="range-label" for="threshold">Reference threshold <output id="threshold-value">3</output></label>
+        <input id="threshold" type="range" min="0" max="80" value="3">
+        <div id="mog2-controls" hidden>
+          <label class="range-label" for="mog2-threshold">MOG2 variance threshold <output id="mog2-threshold-value">16</output></label>
+          <input id="mog2-threshold" type="range" min="1" max="100" value="16">
+        </div>
+        <p class="hint" id="threshold-hint">Threshold controls the reference mask; gain controls the difference image.</p>
+        <label class="toggle"><input id="signed" type="checkbox" checked><span>Signed difference</span><small>±</small></label>
+        <label class="toggle"><input id="cleanup" type="checkbox"><span>Clean mask noise</span></label>
+        <label class="toggle"><input id="light" type="checkbox"><span>Correct global light drift</span></label>
+      </section>
+      <p class="local-note">Processed on this computer.<br>Qualitative visualization, not a density measurement.</p>
+    </aside>
+    <main class="main-view">
+      <div class="view-toolbar">
+        <div class="view-title"><span id="source-title">Synthetic demo</span><small id="source-meta">Preparing video</small></div>
+        <div class="view-actions">
+          <label class="sr-only" for="view">View layout</label>
+          <select id="view">
+            <option value="compare">Compare all four</option>
+            <option value="difference">Amplified difference</option>
+            <option value="mask">Foreground mask</option>
+            <option value="raw">Live input</option>
+            <option value="reference">Captured background</option>
+          </select>
+          <button id="save-image" title="Save the current view (S)">Snapshot ↓</button>
+        </div>
+      </div>
+      <div id="stage" aria-label="Live schlieren visualization">
+        <div id="empty-state"><div class="empty-symbol">≈</div><h1>Connecting to the camera lab</h1><p>The synthetic demo will start automatically.</p></div>
+      </div>
+      <footer class="statusbar"><div><span id="status-dot"></span><span id="status" role="status" aria-live="polite">Connecting to local server…</span></div><span id="fps">— FPS</span></footer>
+      <div class="shortcut-bar"><span><kbd>SPACE</kbd> Retrain</span><span><kbd>1–9</kbd> Camera</span><span><kbd>M</kbd> Model</span><span><kbd>V</kbd> View</span><span><kbd>F</kbd> Fullscreen</span><span><kbd>H</kbd> Controls</span></div>
+    </main>
+  </div>
+  <div id="notice" role="alert" hidden></div>
+  <button id="exit-fullscreen" title="Exit full view (F or Esc)">Exit full view <kbd>ESC</kbd></button>
+</body>
+</html>
