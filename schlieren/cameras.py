@@ -65,6 +65,11 @@ def open_camera(camera, width, height, fps, mjpg=False):
     cap = cv2.VideoCapture(camera.index, camera.backend)
     if not cap.isOpened():
         cap.release()
+        if sys.platform == "win32" and "windowsapps" in sys.base_prefix.lower():
+            raise RuntimeError(
+                f"Cannot open {camera.name} with Microsoft Store Python. "
+                "Run start-demo.ps1 using the standard Python environment (.venv-camera)."
+            )
         alternative = "msmf" if camera.backend == cv2.CAP_DSHOW else "dshow"
         backend_hint = f"or try --backend {alternative}." if sys.platform == "win32" else "and check the device driver."
         raise RuntimeError(

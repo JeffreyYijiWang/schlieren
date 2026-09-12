@@ -54,7 +54,7 @@ For a different port, capture size, or Windows backend:
 .\start-demo.ps1 --port 8766 --width 640 --height 480
 .\start-demo.ps1 --backend msmf
 # Direct Python equivalent, also usable on macOS/Linux with the appropriate Python path:
-.\.venv\Scripts\python.exe serve_demo.py
+.\.venv-camera\Scripts\python.exe serve_demo.py
 ```
 
 ## List connected cameras
@@ -63,8 +63,8 @@ For a different port, capture size, or Windows backend:
 .\list-cameras.ps1
 .\list-cameras.ps1 --backend msmf
 # Python version (does not open camera streams):
-.\.venv\Scripts\python.exe list_cameras.py
-.\.venv\Scripts\python.exe list_cameras.py --json
+.\.venv-camera\Scripts\python.exe list_cameras.py
+.\.venv-camera\Scripts\python.exe list_cameras.py --json
 ```
 
 Camera numbers start at **1** and follow the current device list; they are not permanent
@@ -75,12 +75,24 @@ list. Windows backends may enumerate in a different order.
 
 ## Start on Windows
 
-Run these commands in this repository using PowerShell (Python 3.10 or newer):
+Use a **standard Python installation**, such as Python from python.org, rather than
+Microsoft Store Python. On this machine, Store Python detected the cameras but could
+not open them; the same OpenCV version opened the BRIO successfully with the existing
+standard Python 3.13 installation. The launch scripts now use `.venv-camera`.
+
+Run these commands in this repository using PowerShell:
 
 ```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m schlieren
+py -3.13 -m venv .venv-camera
+.\.venv-camera\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv-camera\Scripts\python.exe -m schlieren
+```
+
+If the Python launcher selects a Store installation, create the environment with the
+full path to standard Python instead. This machine has `C:\Python313\python.exe`:
+
+```powershell
+& 'C:\Python313\python.exe' -m venv .venv-camera
 ```
 
 The desktop app lists connected cameras and asks you to enter your **USB webcam's number**.
@@ -90,17 +102,17 @@ are now 1-based, so `--camera 1` selects the first listed camera. Identify yours
 To list devices or select one directly:
 
 ```powershell
-.\.venv\Scripts\python.exe -m schlieren --list-cameras
-.\.venv\Scripts\python.exe -m schlieren --camera-name "USB"
+.\.venv-camera\Scripts\python.exe -m schlieren --list-cameras
+.\.venv-camera\Scripts\python.exe -m schlieren --camera-name "USB"
 # Or use the camera number shown in your list (2 is just an example):
-.\.venv\Scripts\python.exe -m schlieren --camera 2
+.\.venv-camera\Scripts\python.exe -m schlieren --camera 2
 # Advanced: select a raw, zero-based OpenCV index explicitly:
-.\.venv\Scripts\python.exe -m schlieren --camera-index 1
+.\.venv-camera\Scripts\python.exe -m schlieren --camera-index 1
 ```
 
 If multiple cameras match a name, use their camera number. Numbers can change when devices
-are reconnected. On macOS/Linux use `python3 -m venv .venv`, install using
-`.venv/bin/python -m pip install -r requirements.txt`, then run `.venv/bin/python -m schlieren`.
+are reconnected. On macOS/Linux use `python3 -m venv .venv-camera`, install using
+`.venv-camera/bin/python -m pip install -r requirements.txt`, then run `.venv-camera/bin/python -m schlieren`.
 Device enumeration selects the platform's capture backend; Windows uses DirectShow.
 
 ## Capture your experiment
@@ -166,22 +178,22 @@ Gaussian blur defaults to 3×3; use `--blur 1` to preserve maximum spatial detai
 
 ```powershell
 # MOG2 on the selected webcam:
-.\.venv\Scripts\python.exe -m schlieren --camera-name "USB" --mode mog2
+.\.venv-camera\Scripts\python.exe -m schlieren --camera-name "USB" --mode mog2
 
 # GMG with its initialization phase:
-.\.venv\Scripts\python.exe -m schlieren --camera-name "USB" --mode gmg
+.\.venv-camera\Scripts\python.exe -m schlieren --camera-name "USB" --mode gmg
 
 # Request 1920x1080 MJPEG transport (actual settings depend on the webcam):
-.\.venv\Scripts\python.exe -m schlieren --camera-name "USB" --width 1920 --height 1080 --fps 30 --mjpg
+.\.venv-camera\Scripts\python.exe -m schlieren --camera-name "USB" --width 1920 --height 1080 --fps 30 --mjpg
 
 # Demo with synthetic intensity changes; no camera needed:
-.\.venv\Scripts\python.exe -m schlieren --demo --width 640 --height 360
+.\.venv-camera\Scripts\python.exe -m schlieren --demo --width 640 --height 360
 
 # Local video: initial frames must contain a quiet reference scene:
-.\.venv\Scripts\python.exe -m schlieren --input experiment.mp4 --auto-reference
+.\.venv-camera\Scripts\python.exe -m schlieren --input experiment.mp4 --auto-reference
 
 # Reproducible headless demo, including a recording and final snapshot:
-.\.venv\Scripts\python.exe -m schlieren --demo --headless --width 640 --height 360 --max-frames 180 --record --save-last
+.\.venv-camera\Scripts\python.exe -m schlieren --demo --headless --width 640 --height 360 --max-frames 180 --record --save-last
 ```
 
 `--auto-reference` begins training immediately; use it only when the input is already
@@ -198,6 +210,9 @@ FPS helps identify this. Recordings are previews, not timestamped measurement da
 
 ## Troubleshooting
 
+- Start with `start-demo.ps1`; it uses the verified `.venv-camera` environment. An older
+  server already running on port 8765 must be stopped with Ctrl+C and restarted to pick
+  up the new interpreter. Merely refreshing the browser does not change its Python runtime.
 - Close Camera, Zoom, Teams, OBS, or other software using the webcam. Check Windows
   **Settings → Privacy & security → Camera → Let desktop apps access your camera**.
 - If DirectShow cannot open your webcam, list and select it again with `--backend msmf`.
@@ -210,14 +225,14 @@ FPS helps identify this. Recordings are previews, not timestamped measurement da
   MOG and GMG. Headless OpenCV packages cannot display the desktop window; other OpenCV
   packages share the same `cv2` namespace and should not be installed alongside it.
 - For certificate errors during installation on Windows, retry using the system trust store:
-  `.\.venv\Scripts\python.exe -m pip install --use-feature=truststore -r requirements.txt`.
+  `.\.venv-camera\Scripts\python.exe -m pip install --use-feature=truststore -r requirements.txt`.
 - Run this locally. The `cv2.VideoCapture` code in a hosted Colab runtime cannot directly
   open a USB camera attached to your own computer.
 
 ## Validation and references
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv-camera\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
 Tests use synthetic images/video to check calibration, positive and negative differences,

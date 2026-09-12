@@ -1,4 +1,5 @@
 .venv/
+.venv-camera/
 __pycache__/
 *.py[cod]
 captures/
