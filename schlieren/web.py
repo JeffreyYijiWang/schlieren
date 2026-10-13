@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 
 from .cameras import BACKENDS, default_backend, list_cameras, open_camera
+from .capture_modes import CaptureSettings, capture_report, discover_modes, initial_settings, preset_settings, resolve_auto
 from .demo import DemoCamera
 from .processing import MODES, Processor, Settings
 
@@ -31,6 +32,13 @@ class CameraEngine:
         self.catalog = []
         self.processor = Processor(Settings())
         self.cap = None
+        self.capture = CaptureSettings(width, height, fps)
+        self.camera_settings = {}
+        self.format_cache = {}
+        self.formats = {"modes": [], "note": "Select a camera to detect its capture modes."}
+        self.actual_capture = None
+        self.frame_shape = self.processing_shape = None
+        self.last_preview = 0.0
         self.source_id, self.source_name = "stop", "No camera open"
         self.error = ""
         self.sequence = self.generation = self.applied_command = self.next_command = 0
@@ -43,7 +51,7 @@ class CameraEngine:
         cameras = list_cameras(self.backend)
         records, devices = [], {}
         for number, camera in enumerate(cameras, 1):
-            identity = f"{self.backend}|{camera.index}|{camera.name}|{getattr(camera, 'path', '')}"
+            identity = f"{self.backend}|{getattr(camera, 'path', '') or str(camera.index) + '|' + camera.name}"
             key = hashlib.sha256(identity.encode()).hexdigest()[:20]
             records.append({"number": number, "id": key, "name": camera.name,
                             "opencv_index": camera.index, "backend": self.backend})
@@ -80,6 +88,26 @@ class CameraEngine:
         elif action == "mode":
             if command.get("value") not in MODES:
                 raise ValueError("Unknown background-subtraction mode.")
+        elif action == "capture":
+            with self.lock:
+                valid_ids = {"demo", *self.devices.keys()}
+            if command.get("id") not in valid_ids:
+                raise ValueError("Select a camera before changing its capture settings.")
+            if command.get("preset") not in (None, "max_fps", "max_resolution"):
+                raise ValueError("Unknown capture preset.")
+            if command.get("preset") and command.get("settings"):
+                raise ValueError("Choose a preset or custom capture settings.")
+            if "settings" in command:
+                if not isinstance(command["settings"], dict):
+                    raise ValueError("Capture settings must be an object.")
+                try:
+                    CaptureSettings(**command["settings"])
+                except TypeError as exc:
+                    raise ValueError("Unsupported capture setting.") from exc
+            if "rescan" in command and type(command["rescan"]) is not bool:
+                raise ValueError("rescan must be true or false.")
+            if not any(command.get(key) for key in ("settings", "preset", "rescan")):
+                raise ValueError("Choose capture settings or rescan the camera modes.")
         elif action == "settings":
             allowed = {"gain", "threshold", "cleanup", "signed", "compensate_light", "mog2_threshold"}
             changes = {key: value for key, value in command.items() if key != "action"}
@@ -114,11 +142,14 @@ class CameraEngine:
                  "status": status or self.error or (self.processor.status if self.cap is not None else "Select a camera or Synthetic demo"),
                  "error": self.error, "fps": round(fps, 1), "sequence": self.sequence,
                  "generation": self.generation, "applied_command": self.applied_command,
-                 "frame_shape": frame_shape, "connected": self.cap is not None}
+                 "frame_shape": frame_shape or self.frame_shape, "connected": self.cap is not None,
+                 "capture": asdict(self.capture), "actual_capture": self.actual_capture,
+                 "processing_shape": self.processing_shape, "formats": self.formats}
         with self.lock:
             self.state = state
 
     def _clear_frames(self):
+        self.last_preview = 0.0
         with self.lock:
             self.generation += 1
             self.jpeg = None
@@ -128,27 +159,61 @@ class CameraEngine:
             self.cap.release()
             self.cap = None
 
+    def _open_source(self, source_id, rescan=False):
+        self._release()
+        self._clear_frames()
+        self.processor.reset()
+        self.actual_capture = None
+        self.frame_shape = self.processing_shape = None
+        self.source_id = source_id
+        self.source_name = "No camera open"
+        self.error = ""
+        self.capture = self.camera_settings.get(source_id, CaptureSettings(self.width, self.height, self.fps))
+        self.formats = {"modes": [], "note": "Select a camera to detect its capture modes."}
+        if source_id == "demo":
+            self.source_name = "Synthetic demo"
+            self.formats = {"modes": [], "note": "Synthetic demo: choose a custom size and FPS."}
+            self.cap = DemoCamera(self.capture.width, self.capture.height, self.processor.training_frames + 10)
+            self.processor.reset(capture=True)
+        elif source_id != "stop":
+            with self.lock:
+                selected = self.devices.get(source_id)
+            if selected is None:
+                raise RuntimeError("Camera was disconnected. Refresh the camera list.")
+            self.source_name = selected.name
+            # Re-resolve the current index; unplugging a camera can renumber devices.
+            current = list_cameras(self.backend)
+            path = getattr(selected, "path", None)
+            matches = [c for c in current if (getattr(c, "path", None) == path if path else
+                       (c.index, c.name) == (selected.index, selected.name))]
+            if len(matches) != 1:
+                raise RuntimeError("Selected camera is no longer connected. Refresh cameras and select it again.")
+            camera = matches[0]
+            if rescan or source_id not in self.format_cache:
+                self._publish(status=f"Reading supported modes for {camera.name}...")
+                duplicate = sum(c.name == camera.name for c in current[:current.index(camera)])
+                self.format_cache[source_id] = discover_modes(camera, duplicate)
+            self.formats = self.format_cache[source_id]
+            if source_id not in self.camera_settings and (self.width, self.height, self.fps) == (1280, 720, 30):
+                self.capture = initial_settings(self.capture, self.formats["modes"])
+                self.camera_settings[source_id] = self.capture
+            self._publish(status=f"Opening {camera.name} at {self.capture.width} × {self.capture.height}, {self.capture.fps:g} FPS...")
+            requested = resolve_auto(self.capture, self.formats["modes"])
+            self.cap = open_camera(camera, requested.width, requested.height, requested.fps, fourcc=requested.fourcc)
+
     def _handle(self, command):
         action = command["action"]
         if action == "source":
-            self._release()
-            self._clear_frames()
-            self.processor.reset()
-            self.source_id = command["id"]
-            self.source_name = "No camera open"
-            self.error = ""
-            if self.source_id == "demo":
-                self.source_name = "Synthetic demo"
-                self.cap = DemoCamera(self.width, self.height, self.processor.training_frames + 10)
-                self.processor.reset(capture=True)
-            elif self.source_id != "stop":
-                with self.lock:
-                    camera = self.devices.get(self.source_id)
-                if camera is None:
-                    raise RuntimeError("Camera was disconnected. Refresh the camera list.")
-                self.source_name = camera.name
-                self._publish(status=f"Opening {camera.name}...")
-                self.cap = open_camera(camera, self.width, self.height, self.fps)
+            self._open_source(command["id"])
+        elif action == "capture":
+            if command["id"] != self.source_id:
+                raise ValueError("Camera changed before settings were applied. Select it and try again.")
+            if command.get("preset"):
+                settings = preset_settings(command["preset"], self.formats["modes"], self.capture)
+            else:
+                settings = CaptureSettings(**command.get("settings", asdict(self.capture)))
+            self.camera_settings[self.source_id] = settings
+            self._open_source(self.source_id, rescan=command.get("rescan", False))
         elif action == "train":
             if self.cap is None:
                 raise RuntimeError("Select a working camera or Synthetic demo before retraining.")
@@ -172,8 +237,10 @@ class CameraEngine:
         self.error = ""
 
     def _loop(self):
-        previous = time.perf_counter()
+        rate_started = time.perf_counter()
+        rate_count = 0
         measured = 0.0
+        last_generation = -1
         try:
             while not self.stopping.is_set():
                 started = time.perf_counter()
@@ -192,37 +259,66 @@ class CameraEngine:
                     self.stopping.wait(0.04)
                     continue
                 try:
+                    if last_generation != self.generation:
+                        rate_started = time.perf_counter()
+                        rate_count = 0
+                        measured = 0.0
+                        last_generation = self.generation
                     ok, frame = self.cap.read()
                     if not ok or frame is None or frame.size == 0:
                         raise RuntimeError("Camera stopped delivering frames. Reconnect it and select it again.")
-                    result = self.processor.process(frame)
+                    self.frame_shape = list(frame.shape[:2])
+                    if self.actual_capture is None and self.source_id != "demo":
+                        self.actual_capture = capture_report(self.cap, self.capture, frame.shape)
+                    processing = frame
+                    limit = self.capture.processing_width
+                    if limit and frame.shape[1] > limit:
+                        processing = cv2.resize(frame, (limit, max(1, round(frame.shape[0] * limit / frame.shape[1]))),
+                                                interpolation=cv2.INTER_AREA)
+                    self.processing_shape = list(processing.shape[:2])
+                    result = self.processor.process(processing)
+                    now = time.perf_counter()
+                    rate_count += 1
+                    if now - rate_started >= 0.5:
+                        measured = rate_count / (now - rate_started)
+                        rate_started, rate_count = now, 0
+                    self._publish(measured, self.frame_shape)
+                    # Models run on every acquired frame; JPEG work is limited to 60 Hz.
+                    if now - self.last_preview < 1 / 60:
+                        if self.source_id == "demo":
+                            self.stopping.wait(max(0, 1 / self.capture.fps - (now - started)))
+                        continue
+                    self.last_preview = now
                     images = [frame, result.reference, result.enhanced, result.mask]
                     h, w = frame.shape[:2]
                     size = (min(640, w), max(1, round(h * min(640, w) / w)))
                     tiles = []
                     for image in images:
-                        image = np.clip(image, 0, 255).astype(np.uint8)
+                        if image.dtype != np.uint8:
+                            image = np.clip(image, 0, 255).astype(np.uint8)
+                        image = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
                         if image.ndim == 2:
                             image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-                        tiles.append(cv2.resize(image, size, interpolation=cv2.INTER_AREA))
+                        tiles.append(image)
                     atlas = np.vstack((np.hstack(tiles[:2]), np.hstack(tiles[2:])))
                     ok, encoded = cv2.imencode(".jpg", atlas, [cv2.IMWRITE_JPEG_QUALITY, 90])
                     if not ok:
                         raise RuntimeError("Could not encode camera preview.")
-                    now = time.perf_counter()
-                    measured = 0.85 * measured + 0.15 / max(now - previous, 1e-6)
-                    previous = now
                     with self.lock:
                         self.jpeg = encoded.tobytes()
                         self.sequence += 1
-                    self._publish(measured, list(frame.shape[:2]))
+                    self._publish(measured, self.frame_shape)
                 except Exception as exc:
                     self.error = str(exc)
                     self._release()
+                    self.actual_capture = None
+                    self.frame_shape = self.processing_shape = None
                     self._clear_frames()
                     self.processor.reset()
                     self._publish()
-                self.stopping.wait(max(0, 1 / self.fps - (time.perf_counter() - started)))
+                # A real camera paces read(); a fixed 30 Hz sleep would cap high-FPS modes.
+                if self.source_id == "demo":
+                    self.stopping.wait(max(0, 1 / self.capture.fps - (time.perf_counter() - started)))
         finally:
             self._release()
 
@@ -282,6 +378,15 @@ def make_handler(engine):
                 self.json_reply(404, {"error": f"Missing viewer file: {filename}"})
 
         def do_POST(self):
+            # Drain bounded request bodies before early rejection. Closing a socket
+            # with unread bytes can reset it on Windows before the client sees 403.
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 4096:
+                    raise ValueError("Invalid command size.")
+                body = self.rfile.read(length)
+            except ValueError as exc:
+                return self.json_reply(400, {"error": str(exc)})
             origin = self.headers.get("Origin")
             if (not self.valid_host() or self.headers.get("X-Schlieren") != "1"
                     or (origin and origin != f"http://{self.headers.get('Host')}")):
@@ -289,10 +394,7 @@ def make_handler(engine):
             if self.path != "/api/command":
                 return self.json_reply(404, {"error": "Not found"})
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                if not 0 < length <= 4096:
-                    raise ValueError("Invalid command size.")
-                command = json.loads(self.rfile.read(length))
+                command = json.loads(body)
                 ticket = engine.submit(command)
                 self.json_reply(202, {"command": ticket})
             except (ValueError, TypeError) as exc:
@@ -308,8 +410,12 @@ def main(argv=None):
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--fps", type=float, default=30)
     args = parser.parse_args(argv)
-    if not 1024 <= args.port <= 65535 or min(args.width, args.height) < 1 or not 0 < args.fps <= 240:
-        parser.error("Use port 1024..65535, positive dimensions, and FPS in (0, 240].")
+    if not 1024 <= args.port <= 65535:
+        parser.error("Use port 1024..65535.")
+    try:
+        CaptureSettings(args.width, args.height, args.fps)
+    except ValueError as exc:
+        parser.error(str(exc))
     engine = CameraEngine(args.backend, args.width, args.height, args.fps)
     try:
         server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(engine))

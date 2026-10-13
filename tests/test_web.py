@@ -7,6 +7,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+import cv2
+import numpy as np
+
 from schlieren.web import CameraEngine, make_handler
 
 
@@ -38,10 +41,12 @@ class WebEngineTests(unittest.TestCase):
             record = engine.refresh_cameras()[0]
         previous = Mock()
         engine.cap = previous
-        with patch("schlieren.web.open_camera", side_effect=RuntimeError("Camera busy")) as op:
+        with patch("schlieren.web.open_camera", side_effect=RuntimeError("Camera busy")) as op, \
+                patch("schlieren.web.list_cameras", return_value=[camera]), \
+                patch("schlieren.web.discover_modes", return_value={"modes": [], "note": "test"}):
             with self.assertRaisesRegex(RuntimeError, "Camera busy"):
                 engine._handle({"action": "source", "id": record["id"]})
-            op.assert_called_once_with(camera, 160, 90, 30)
+            op.assert_called_once_with(camera, 160, 90, 30, fourcc="auto")
         previous.release.assert_called_once()
         self.assertIsNone(engine.cap)
         self.assertIsNone(engine.processor.reference)
@@ -75,9 +80,59 @@ class WebEngineTests(unittest.TestCase):
                         {"action": "settings", "gain": 0},
                         {"action": "settings", "threshold": 1.5},
                         {"action": "settings", "cleanup": "false"},
+                        {"action": "capture", "id": "demo", "settings": {"fps": -1}},
+                        {"action": "capture", "id": "demo", "settings": {"unknown": True}},
                         {"action": "settings", "mog2_threshold": float("nan")}):
             with self.subTest(command=command), self.assertRaises(ValueError):
                 engine.submit(command)
+
+    def test_capture_resize_clears_background_and_uses_requested_processing_size(self):
+        engine = CameraEngine("dshow", 160, 90, fps=240)
+        engine.start()
+        try:
+            first = wait_for(engine, lambda s: s["ready"])
+            ticket = engine.submit({"action": "capture", "id": "demo", "settings":
+                                    {"width": 800, "height": 600, "fps": 120, "processing_width": 640}})
+            changed = wait_for(engine, lambda s: s["applied_command"] >= ticket and s["processing_shape"] == [480, 640])
+            self.assertGreater(changed["generation"], first["generation"])
+            self.assertEqual(changed["frame_shape"], [600, 800])
+            self.assertEqual(changed["capture"]["fps"], 120)
+            self.assertFalse(changed["ready"])
+        finally:
+            engine.close()
+
+    def test_camera_capture_settings_are_remembered_separately_and_never_reuse_background(self):
+        cameras = [SimpleNamespace(index=i, name=f"Camera {i}", backend=700) for i in (1, 2)]
+        engine = CameraEngine("dshow", 160, 90)
+        with patch("schlieren.web.list_cameras", return_value=cameras), \
+                patch("schlieren.web.discover_modes", return_value={"modes": [], "note": "test"}), \
+                patch("schlieren.web.open_camera") as op:
+            first, second = engine.refresh_cameras()
+            engine._handle({"action": "source", "id": first["id"]})
+            old_cap = engine.cap
+            engine.processor.reference = np.zeros((90, 160), np.float32)
+            engine.processor.ready = True
+            engine._handle({"action": "capture", "id": first["id"], "settings": {"width": 640, "height": 480, "fps": 90}})
+            old_cap.release.assert_called()
+            self.assertFalse(engine.processor.ready)
+            engine._handle({"action": "source", "id": second["id"]})
+            self.assertEqual(engine.capture.fps, 30)
+            engine._handle({"action": "source", "id": first["id"]})
+            self.assertEqual(engine.capture.fps, 90)
+            op.assert_called_with(cameras[0], 640, 480, 90, fourcc="auto")
+            with self.assertRaisesRegex(ValueError, "Camera changed"):
+                engine._handle({"action": "capture", "id": second["id"], "settings": {"fps": 60}})
+
+    def test_unplugged_camera_index_never_opens_another_device(self):
+        camera = SimpleNamespace(index=1, name="DFK", path="usb-dfk", backend=700)
+        engine = CameraEngine("dshow", 160, 90)
+        with patch("schlieren.web.list_cameras", return_value=[camera]):
+            record = engine.refresh_cameras()[0]
+        replacement = SimpleNamespace(index=1, name="OBS", path="virtual-obs", backend=700)
+        with patch("schlieren.web.list_cameras", return_value=[replacement]), patch("schlieren.web.open_camera") as op:
+            with self.assertRaisesRegex(RuntimeError, "no longer connected"):
+                engine._handle({"action": "source", "id": record["id"]})
+            op.assert_not_called()
 
 
 class WebHTTPTests(unittest.TestCase):

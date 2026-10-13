@@ -35,11 +35,57 @@ to enlarge it. **Fullscreen** fills the monitor; **H** hides the controls for mo
 | S / Snapshot | Download a PNG of the displayed canvas |
 | Enable learning / Freeze model | Toggle adaptive learning after statistical-model training |
 | Release camera | Stop capture and release the device |
+| Max frame rate / Max resolution | Apply the fastest / largest compatible driver mode |
+| Apply capture settings | Reopen this camera with the chosen resolution, FPS, and video format |
+| Rescan camera modes | Refresh the driver's mode list after changing USB connection or camera configuration |
 
 Space retrains even when a slider or button has keyboard focus. Hold the scene still
 for 30 frames (GMG: at least 121). Changing cameras or models discards the old background;
 images are marked as untrained until Space is pressed and training completes. A failed
 camera shows an error; select another camera or Synthetic demo to recover.
+
+### Resolution and frame rate
+
+Expand **Resolution & frame rate** under the camera list. Select a camera resolution,
+enter a requested FPS, then click **Apply capture settings**. **Auto** video format
+chooses a compatible format from the driver list, preferring MJPEG when it meets the
+requested rate. Explicit MJPG, YUY2, UYVY, and I420 requests are also available.
+Unsupported requests may be rounded by the driver; the viewer shows the dimensions
+of received frames, the driver-reported FPS/format, and any mismatch with your request.
+Press **Space** after the image settles to capture a fresh background.
+
+**Max frame rate** selects the highest FPS among compatible formats currently exposed
+by the driver, using the largest resolution to break ties. **Max resolution** selects
+the largest pixel count, then its highest FPS. These are capture targets; **Processing
+FPS** measures completed frames per elapsed time, including capture, subtraction, and
+preview work. It is not the camera's advertised FPS. USB bandwidth, exposure, CPU load,
+and the selected model affect throughput. The app processes every frame it acquires;
+it does not guarantee acquisition of every sensor frame. JPEG preview generation and
+the p5 canvas are limited to 60 FPS and may display fewer frames than are processed.
+
+**Process image at** defaults to full camera resolution. Reducing it to 640, 1280, or
+1920 pixels wide resizes frames *before* background subtraction (without upscaling),
+trading spatial detail for speed while keeping the selected camera capture resolution.
+The readout shows both sizes. Camera settings are remembered separately for each device
+while this server is running. Backgrounds are always discarded on camera/capture changes.
+
+Windows automatic mode discovery uses **FFmpeg on PATH**, with its DirectShow input
+enabled (`ffmpeg -devices`). FFmpeg is already installed on this machine. It only reads
+the driver's format list; OpenCV captures the video. No extra Python package is required.
+Other backends, or systems without FFmpeg, retain the manual controls and actual-setting
+readout; max presets stay disabled when a compatible mode list cannot be obtained.
+**Rescan camera modes** temporarily releases/reopens the camera and clears its background.
+
+Published capabilities are [BRIO 4K/30, 1080p/60, and 720p/90 in MJPEG](https://support.logi.com/hc/en-001/articles/360023463373-BRIO-4K-Stream-Edition-Technical-Specifications)
+and [DFK 33UP1300 full sensor 1280 × 1024 at up to 210 FPS](https://www.theimagingsource.com/en-us/product/industrial/33u/dfk33up1300/).
+Actual driver modes depend on the connection and format. During testing on this machine,
+BRIO exposed and accepted **1280 × 720/60 MJPG** and **1920 × 1080/30 MJPG**; 4K was not
+exposed. Check a USB 3 port/cable and camera configuration, then rescan, to discover
+additional modes. DFK accepted **640 × 480/400 YUY2** and **1280 × 1024/120 YUY2**.
+Its raw Bayer/packed modes, including 210 FPS at full resolution and higher rates at
+smaller regions, are listed by the diagnostic script but excluded from presets because
+this viewer's OpenCV capture path does not decode them. Driver rates are not measured
+processing performance.
 
 This is a **p5.js frontend with a local Python/OpenCV processing server**, so all four
 models use the same implementation as the desktop app. It is not a standalone p5 Web
@@ -59,12 +105,34 @@ For a different port, capture size, or Windows backend:
 
 ## List connected cameras
 
+### Sony FX30 over USB
+
+The viewer can use the FX30's standard USB video output. On the camera, choose
+**MENU → Setup → USB → USB Connection Mode → USB Streaming**. Under
+**Network → Streaming → USB Streaming**, choose the output resolution/frame rate,
+then connect the powered camera to the computer with a USB data cable. The camera
+should show **Streaming: Standby**. Click **Refresh** in the viewer and select the
+Sony camera by name; press **Space** once the image settles.
+
+Sony documents USB streaming up to 1080p59.94/50 or 4K14.99/12.5, depending on the
+camera's settings. USB 2 connections are limited to 720p29.97/25. Use a USB 3 data
+connection for higher modes. After changing the camera's streaming output, click
+**Rescan camera modes** in the viewer. Selecting a mode in the viewer cannot switch
+the camera out of file-transfer or remote-shooting mode. For HDMI capture, select the
+USB capture device's name instead of the camera's name. See the
+[Sony FX30 USB streaming guide](https://helpguide.sony.net/ilc/2220/v1/en/contents/TP1000888924.html).
+
+### Camera listing commands
+
 ```powershell
 .\list-cameras.ps1
 .\list-cameras.ps1 --backend msmf
 # Python version (does not open camera streams):
 .\.venv-camera\Scripts\python.exe list_cameras.py
 .\.venv-camera\Scripts\python.exe list_cameras.py --json
+# Inspect one camera's resolution/format/FPS limits (use its current camera number):
+.\list-cameras.ps1 --modes 2
+.\list-cameras.ps1 --modes 3 --json
 ```
 
 Camera numbers start at **1** and follow the current device list; they are not permanent

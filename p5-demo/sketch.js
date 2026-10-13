@@ -8,6 +8,7 @@
   let view = "compare", alive = true, noticeTimer, frameFailures = 0;
   let commandChain = Promise.resolve(), pendingTransition = null, transitionRevision = 0;
   const debounces = new Map();
+  let captureDirty = false, captureKey = "", captureSource = null, formatKey = "";
 
   function notice(message) {
     $("notice").textContent = message;
@@ -90,6 +91,65 @@
     $("empty-state").querySelector("p").textContent = description;
   }
 
+  function updateCaptureUI() {
+    if (!state.capture) {
+      $("capture-modes-note").textContent = "Restart start-demo.ps1 to load the new camera controls.";
+      $("capture-controls").querySelectorAll("button, input, select").forEach((el) => { el.disabled = true; });
+      return;
+    }
+    const available = (state.formats?.modes || []).filter((mode) => mode.selectable);
+    const nextFormatKey = JSON.stringify([state.source_id, available]);
+    if (nextFormatKey !== formatKey) {
+      formatKey = nextFormatKey;
+      const sizes = new Map();
+      for (const mode of available) sizes.set(`${mode.width}x${mode.height}`, `${mode.width} × ${mode.height}`);
+      const requestSize = `${state.capture.width}x${state.capture.height}`;
+      sizes.set(requestSize, `${state.capture.width} × ${state.capture.height}`);
+      $("capture-resolution").replaceChildren(...[...sizes].map(([value, label]) => new Option(label, value)), new Option("Custom size…", "custom"));
+      captureKey = "";
+    }
+    const sourceChanged = captureSource !== state.source_id;
+    if (sourceChanged) captureDirty = false;
+    captureSource = state.source_id;
+    const nextKey = JSON.stringify(state.capture);
+    if (!captureDirty && (sourceChanged || captureKey !== nextKey) && pendingTransition === null) {
+      captureKey = nextKey;
+      $("capture-width").value = state.capture.width;
+      $("capture-height").value = state.capture.height;
+      const size = `${state.capture.width}x${state.capture.height}`;
+      $("capture-resolution").value = [...$("capture-resolution").options].some((option) => option.value === size) ? size : "custom";
+      $("custom-size").hidden = $("capture-resolution").value !== "custom";
+      $("capture-fps").value = state.capture.fps;
+      $("capture-format").value = state.capture.fourcc;
+      $("processing-width").value = state.capture.processing_width;
+    }
+    const disabled = state.source_id === "stop" || pendingTransition !== null;
+    $("capture-controls").querySelectorAll("button, input, select").forEach((el) => { el.disabled = disabled; });
+    $("max-fps").disabled = $("max-resolution").disabled = disabled || !available.length;
+    $("rescan-modes").disabled = disabled || state.source_id === "demo";
+    if (available.length) {
+      const speed = [...available].sort((a, b) => b.fps - a.fps || b.width * b.height - a.width * a.height)[0];
+      const size = [...available].sort((a, b) => b.width * b.height - a.width * a.height || b.fps - a.fps)[0];
+      $("capture-presets-hint").textContent = `Speed: ${speed.width} × ${speed.height} / ${speed.fps} FPS. Detail: ${size.width} × ${size.height} / ${size.fps} FPS.`;
+    } else $("capture-presets-hint").textContent = "Custom resolution and FPS requests are available below.";
+    const actual = state.actual_capture;
+    const processed = state.processing_shape;
+    $("capture-actual").textContent = actual
+      ? `Delivered: ${actual.width} × ${actual.height}\nDriver: ${actual.fps ?? "unknown"} FPS · ${actual.fourcc}${processed ? `\nProcessing: ${processed[1]} × ${processed[0]}` : ""}`
+      : state.source_id === "demo" ? "Synthetic input · no hardware frame rate" : "Waiting for a camera frame";
+    $("capture-warning").hidden = !actual?.warning;
+    $("capture-warning").textContent = actual?.warning || "";
+    $("capture-modes-note").textContent = state.formats?.note || "";
+  }
+
+  function changeCapture(extra) {
+    if (!state || state.source_id === "stop") return;
+    captureDirty = false;
+    captureKey = "";
+    showEmpty("Applying camera settings", "Reopening the selected camera. Press Space to capture a new background after the image settles.");
+    transition({ action: "capture", id: state.source_id, ...extra });
+  }
+
   function updateUI(next) {
     const previous = state;
     state = next;
@@ -109,7 +169,8 @@
     });
     $("status").textContent = state.status;
     $("status-dot").style.background = state.error ? "#f6ac83" : state.training ? "#dfc783" : "#c8e896";
-    $("fps").textContent = `${state.fps.toFixed(1)} FPS`;
+    $("fps").textContent = `Processing ${state.fps.toFixed(1)} FPS`;
+    updateCaptureUI();
     const percent = state.ready ? 100 : Math.min(100, 100 * state.training_count / state.training_total);
     $("training-progress").style.width = `${percent}%`;
     document.querySelector("[role=progressbar]").setAttribute("aria-valuenow", Math.round(percent));
@@ -170,7 +231,7 @@
       } else if (response.status === 204) clearBitmap();
       frameFailures = 0;
     } catch (_) { frameFailures++; if (frameFailures > 3) clearBitmap(); }
-    setTimeout(pollFrame, frameFailures ? 500 : 30);
+    setTimeout(pollFrame, frameFailures ? 500 : 8);
   }
 
   function retrain() { transition({ action: "train" }); }
@@ -187,6 +248,28 @@
   function toggleControls() { document.body.classList.toggle("controls-hidden"); }
 
   $("refresh-cameras").onclick = refreshCameras;
+  $("capture-form").oninput = () => { captureDirty = true; };
+  $("capture-resolution").onchange = () => {
+    captureDirty = true;
+    const value = $("capture-resolution").value;
+    $("custom-size").hidden = value !== "custom";
+    if (value !== "custom") {
+      const [width, height] = value.split("x").map(Number);
+      $("capture-width").value = width;
+      $("capture-height").value = height;
+    }
+  };
+  $("capture-form").onsubmit = (event) => {
+    event.preventDefault();
+    changeCapture({ settings: {
+      width: Number($("capture-width").value), height: Number($("capture-height").value),
+      fps: Number($("capture-fps").value), fourcc: $("capture-format").value,
+      processing_width: Number($("processing-width").value),
+    } });
+  };
+  $("max-fps").onclick = () => changeCapture({ preset: "max_fps" });
+  $("max-resolution").onclick = () => changeCapture({ preset: "max_resolution" });
+  $("rescan-modes").onclick = () => changeCapture({ rescan: true });
   $("camera").onchange = (event) => switchSource(event.target.value);
   $("stop-camera").onclick = () => switchSource("stop");
   $("retrain").onclick = retrain;
@@ -227,7 +310,7 @@
       const stage = $("stage");
       p.createCanvas(stage.clientWidth, stage.clientHeight).parent(stage);
       p.pixelDensity(1);
-      p.frameRate(30);
+      p.frameRate(60);
       p.textFont("Segoe UI");
       new ResizeObserver(() => p.resizeCanvas(stage.clientWidth, stage.clientHeight)).observe(stage);
     };
@@ -275,6 +358,9 @@
   document.addEventListener("keydown", (event) => {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
     const element = event.target;
+    if (event.code === "Space" && element.tagName === "INPUT" && element.type === "number") {
+      event.preventDefault(); retrain(); return;
+    }
     if (element.isContentEditable || element.tagName === "TEXTAREA" || (element.tagName === "INPUT" && element.type !== "range" && element.type !== "checkbox")) return;
     if (event.code === "Space") { event.preventDefault(); retrain(); return; }
     if (event.key === "Escape" && document.body.classList.contains("immersive")) { event.preventDefault(); fullscreen(); return; }

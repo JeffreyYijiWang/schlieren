@@ -22,6 +22,36 @@
         <p class="hint">Press <kbd>1</kbd>–<kbd>9</kbd> to switch cameras.</p>
         <div id="camera-list" class="camera-list" aria-label="Connected cameras"></div>
         <button id="stop-camera" class="quiet-button">Release camera</button>
+        <details class="capture-panel" open>
+          <summary>Resolution &amp; frame rate</summary>
+          <div id="capture-controls">
+            <div class="capture-presets">
+              <button id="max-fps" type="button">Max frame rate</button>
+              <button id="max-resolution" type="button">Max resolution</button>
+            </div>
+            <p class="hint" id="capture-presets-hint">Select a camera to detect its modes.</p>
+            <form id="capture-form">
+              <label for="capture-resolution">Camera resolution</label>
+              <select id="capture-resolution"><option value="1280x720">1280 × 720</option><option value="custom">Custom size…</option></select>
+              <div id="custom-size" class="capture-row" hidden>
+                <label>Width<input id="capture-width" type="number" min="16" max="8192" step="1" value="1280" required></label>
+                <label>Height<input id="capture-height" type="number" min="16" max="8192" step="1" value="720" required></label>
+              </div>
+              <div class="capture-row">
+                <label for="capture-fps">Requested FPS<input id="capture-fps" type="number" min="1" max="1000" step="any" value="30" required></label>
+                <label for="capture-format">Video format<select id="capture-format"><option value="auto">Auto</option><option>MJPG</option><option>YUY2</option><option>UYVY</option><option>I420</option></select></label>
+              </div>
+              <label for="processing-width">Process image at</label>
+              <select id="processing-width"><option value="0">Full camera resolution</option><option value="1920">Up to 1920 px wide</option><option value="1280">Up to 1280 px wide</option><option value="640">Up to 640 px wide · faster</option></select>
+              <button id="apply-capture" class="apply-button" type="submit">Apply capture settings</button>
+            </form>
+            <p id="capture-actual" class="capture-readout" aria-live="polite">Waiting for camera</p>
+            <p id="capture-warning" class="hint capture-warning" hidden></p>
+            <p class="hint">Changing capture settings clears the background. Press <kbd>Space</kbd> to retrain. Smaller processing images can improve speed.</p>
+            <button id="rescan-modes" class="text-button" type="button">Rescan camera modes</button>
+            <p id="capture-modes-note" class="hint"></p>
+          </div>
+        </details>
       </section>
       <section>
         <h2>02 / BACKGROUND MODEL</h2>

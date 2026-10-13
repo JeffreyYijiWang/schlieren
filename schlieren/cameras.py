@@ -61,7 +61,7 @@ def select_camera(cameras, index=None, name=None, number=None):
     return matches[0]
 
 
-def open_camera(camera, width, height, fps, mjpg=False):
+def open_camera(camera, width, height, fps, mjpg=False, fourcc="auto"):
     cap = cv2.VideoCapture(camera.index, camera.backend)
     if not cap.isOpened():
         cap.release()
@@ -76,9 +76,16 @@ def open_camera(camera, width, height, fps, mjpg=False):
             f"Cannot open {camera.name}. Close other camera apps, check camera permissions, "
             + backend_hint
         )
-    if mjpg:
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cap.set(cv2.CAP_PROP_FPS, fps)
+    try:
+        # DirectShow's FPS setter rebuilds the graph without preserving FOURCC.
+        # Apply FPS first, dimensions next, and the explicit transport format last.
+        cap.set(cv2.CAP_PROP_FPS, fps)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        chosen = "MJPG" if mjpg else fourcc
+        if chosen != "auto":
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*chosen))
+    except Exception:
+        cap.release()
+        raise
     return cap
